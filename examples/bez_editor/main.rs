@@ -14,8 +14,9 @@
 
 //! A simple bezier path editor.
 
-use druid::kurbo::{Point, Size};
+use druid::kurbo::{Affine, Point, Size};
 use druid::piet::{Color, RenderContext};
+use druid::shell::window::Cursor;
 use druid::shell::{runloop, WindowBuilder};
 use std::sync::Arc;
 
@@ -26,14 +27,26 @@ use druid::{
 
 mod draw;
 mod pen;
+mod toolbar;
 
 use draw::{draw_active_path, draw_inactive_path};
 use pen::Pen;
+use toolbar::Toolbar;
 
 const BG_COLOR: Color = Color::rgb24(0xfb_fb_fb);
 pub(crate) const MIN_POINT_DISTANCE: f64 = 3.0;
 
-struct Canvas;
+struct Canvas {
+    toolbar: Toolbar,
+}
+
+impl Canvas {
+    fn new() -> Self {
+        Canvas {
+            toolbar: Toolbar::basic(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum PathSeg {
@@ -191,7 +204,13 @@ impl Data for Path {
 }
 
 impl Widget<CanvasState> for Canvas {
-    fn paint(&mut self, paint_ctx: &mut PaintCtx, _: &BaseState, data: &CanvasState, _env: &Env) {
+    fn paint(
+        &mut self,
+        paint_ctx: &mut PaintCtx,
+        _base: &BaseState,
+        data: &CanvasState,
+        _env: &Env,
+    ) {
         paint_ctx.render_ctx.clear(BG_COLOR);
         for path in data.contents.paths.iter() {
             draw_inactive_path(path, paint_ctx);
@@ -200,6 +219,13 @@ impl Widget<CanvasState> for Canvas {
         if let Some(active) = data.contents.active_path.as_ref() {
             draw_active_path(active, &data.tool, paint_ctx);
         }
+        let toolbar_offset = (8.0, 8.0);
+        let _ = paint_ctx.render_ctx.save();
+        paint_ctx
+            .render_ctx
+            .transform(Affine::translate(toolbar_offset));
+        self.toolbar.paint(paint_ctx, _base, data, _env);
+        let _ = paint_ctx.render_ctx.restore();
     }
 
     fn layout(
@@ -219,8 +245,6 @@ impl Widget<CanvasState> for Canvas {
         data: &mut CanvasState,
         _env: &Env,
     ) -> Option<Action> {
-        let CanvasState { tool, contents } = data;
-
         // first we try to handle things at the top level, and then we pass
         // them to the tool.
         //TODO: move this into a separate function.
@@ -233,7 +257,18 @@ impl Widget<CanvasState> for Canvas {
             _ => (),
         }
 
-        if tool.event(contents, event) {
+        if let Some(action) = self.toolbar.event(event, ctx, data, _env) {
+            match action.as_str() {
+                "select" => ctx.window().set_cursor(&Cursor::Arrow),
+                "pen" => ctx.window().set_cursor(&Cursor::Crosshair),
+                other => eprintln!("unexpected action '{}'", other),
+            }
+            ctx.invalidate();
+        }
+
+        let CanvasState { tool, contents } = data;
+
+        if !ctx.is_handled() && tool.event(contents, event) {
             ctx.invalidate();
         }
         None
@@ -248,7 +283,7 @@ fn main() {
     let mut run_loop = runloop::RunLoop::new();
     let mut builder = WindowBuilder::new();
     let state = CanvasState::new();
-    let mut state = UiState::new(Canvas, state);
+    let mut state = UiState::new(Canvas::new(), state);
     state.set_active(true);
     builder.set_title("Paths");
     builder.set_handler(Box::new(UiMain::new(state)));
